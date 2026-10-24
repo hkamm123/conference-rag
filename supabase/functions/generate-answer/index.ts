@@ -12,8 +12,8 @@ import { withSupabase } from "@supabase/server";
 
 const CHAT_MODEL = "gpt-4o";
 
-// Cost limits. app.js sends the top 3 talks; 5 talks is also the most that
-// fits under the Data API's 1,000-row limit (the longest talk has 113 sentences).
+// Cost limits. app.js sends the top 3 talks. (The longest talk has 34 chunks,
+// so 5 talks stays far below the Data API's 1,000-row limit.)
 const MAX_QUESTION_LENGTH = 1000;
 const MAX_TALKS = 5;
 const MAX_ANSWER_TOKENS = 700;
@@ -33,7 +33,7 @@ Rules:
 const NO_SOURCES_ANSWER =
   "I couldn't find any conference talks related to that question.";
 
-type Talk = { title: string; speaker: string; sentences: string[] };
+type Talk = { title: string; speaker: string; chunks: string[] };
 
 function errorResponse(status: number, message: string): Response {
   // app.js reads `error` from failed responses.
@@ -49,7 +49,7 @@ function cleanSpeaker(speaker: string): string {
 export default {
   // auth: "user" verifies the caller's JWT before this handler runs, and gives
   // us ctx.supabase: a database client that acts as THAT user, so RLS on
-  // sentence_embeddings still applies to the queries below.
+  // talks and talk_chunks still applies to the queries below.
   fetch: withSupabase({ auth: "user" }, async (req, ctx) => {
     if (req.method !== "POST") {
       return errorResponse(405, "Use POST");
@@ -89,14 +89,15 @@ export default {
       return Response.json({ answer: NO_SOURCES_ANSWER });
     }
 
-    // Load the talks' sentences in order. Select only the columns we need:
-    // `embedding` would add ~30 KB of JSON per row for nothing.
+    // Load the talks' chunks in order, with each talk's details nested under
+    // row.talks (PostgREST follows the talk_id foreign key). Select only the
+    // columns we need: `embedding` would add ~30 KB of JSON per row for nothing.
     const { data: rows, error: dbError } = await ctx.supabase
-      .from("sentence_embeddings")
-      .select("talk_id, title, speaker, sentence_num, text")
+      .from("talk_chunks")
+      .select("talk_id, chunk_num, text, talks(title, speaker)")
       .in("talk_id", talkIds)
       .order("talk_id")
-      .order("sentence_num");
+      .order("chunk_num");
     if (dbError) {
       console.error("Database error", dbError);
       return errorResponse(500, "Could not load the source talks");
@@ -106,14 +107,20 @@ export default {
     for (const row of rows ?? []) {
       let talk = talks.get(row.talk_id);
       if (!talk) {
+        // Each chunk has exactly one talk (many-to-one), so PostgREST returns
+        // `talks` as a single object. Without generated database types the
+        // client can't know that and types it as an array.
+        const info = row.talks as unknown as
+          | { title: string; speaker: string | null }
+          | null;
         talk = {
-          title: row.title,
-          speaker: cleanSpeaker(row.speaker ?? "Unknown"),
-          sentences: [],
+          title: info?.title ?? "Untitled talk",
+          speaker: cleanSpeaker(info?.speaker ?? "Unknown"),
+          chunks: [],
         };
         talks.set(row.talk_id, talk);
       }
-      talk.sentences.push(row.text);
+      talk.chunks.push(row.text);
     }
     if (talks.size === 0) {
       return Response.json({ answer: NO_SOURCES_ANSWER });
@@ -126,7 +133,7 @@ export default {
       .map((id, i) => {
         const talk = talks.get(id)!;
         return `[Talk ${i + 1}] "${talk.title}" by ${talk.speaker}\n${
-          talk.sentences.join(" ")
+          talk.chunks.join("\n\n")
         }`;
       })
       .join("\n\n---\n\n");

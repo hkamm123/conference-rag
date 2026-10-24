@@ -1,7 +1,7 @@
 """
 Step 2: Scrape Conference Talks
 ================================
-Scrapes 5 years of General Conference talks from the Church website
+Scrapes General Conference talks (START_YEAR through END_YEAR) from the Church website
 and saves them to data/talks.json.
 
 Usage:
@@ -25,9 +25,9 @@ from bs4 import BeautifulSoup
 from tqdm import tqdm
 
 
-YEARS_TO_SCRAPE = 5
-START_YEAR = 2025 - YEARS_TO_SCRAPE
-END_YEAR = 2025
+# Inclusive range: 2020-2026 is 7 years (14 conferences).
+START_YEAR = 2020
+END_YEAR = 2026
 OUTPUT_DIR = os.path.join('scripts', 'output')
 OUTPUT_FILE = os.path.join(OUTPUT_DIR, 'talks.json')
 
@@ -116,7 +116,9 @@ def scrape_talk(talk_url, session):
     if not content_div:
         return None
 
-    content = " ".join(p.text.strip() for p in content_div.find_all("p"))
+    # Keep paragraph boundaries: the import step chunks by paragraph.
+    paragraphs = [p.text.strip() for p in content_div.find_all("p") if p.text.strip()]
+    content = " ".join(paragraphs)
 
     year_match = re.search(r'/(\d{4})/', talk_url)
     year = int(year_match.group(1)) if year_match else None
@@ -129,7 +131,8 @@ def scrape_talk(talk_url, session):
         "year": year,
         "season": season,
         "url": talk_url,
-        "text": content
+        "text": content,
+        "paragraphs": paragraphs
     }
 
 

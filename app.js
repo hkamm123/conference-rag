@@ -320,7 +320,7 @@ async function checkSearchReadiness() {
     try {
         // --- Check 1: Any data at all? (keyword search just needs text) ---
         const { count: totalCount, error: totalError } = await supabaseClient
-            .from('sentence_embeddings')
+            .from('talk_chunks')
             .select('*', { count: 'exact', head: true });
 
         const hasData = !totalError && totalCount > 0;
@@ -330,7 +330,7 @@ async function checkSearchReadiness() {
         let hasEmbeddings = false;
         if (hasData) {
             const { count, error } = await supabaseClient
-                .from('sentence_embeddings')
+                .from('talk_chunks')
                 .select('*', { count: 'exact', head: true })
                 .not('embedding', 'is', null);
             hasEmbeddings = !error && count > 0;
@@ -415,10 +415,12 @@ async function keywordSearch() {
     clearResults('keyword');
 
     try {
-        // Search sentence_embeddings that contain the keyword (case-insensitive)
+        // Search talk chunks that contain the keyword (case-insensitive).
+        // talks(...) follows the talk_id foreign key, so each row comes back
+        // with its talk's details nested under row.talks.
         const { data, error } = await supabaseClient
-            .from('sentence_embeddings')
-            .select('text, talk_id, title, speaker, url')
+            .from('talk_chunks')
+            .select('text, talk_id, talks(title, speaker, url)')
             .ilike('text', `%${query}%`)
             .limit(20);
 
@@ -435,9 +437,9 @@ async function keywordSearch() {
             const talkId = row.talk_id;
             if (!talks[talkId]) {
                 talks[talkId] = {
-                    title: row.title || 'Unknown Talk',
-                    speaker: row.speaker || 'Unknown Speaker',
-                    url: row.url || '',
+                    title: row.talks?.title || 'Unknown Talk',
+                    speaker: row.talks?.speaker || 'Unknown Speaker',
+                    url: row.talks?.url || '',
                     sentences: []
                 };
             }
@@ -598,7 +600,7 @@ async function getEmbedding(text) {
 async function searchSentences(embedding) {
     if (!supabaseClient) throw new Error('Supabase not configured');
 
-    const { data, error } = await supabaseClient.rpc('match_sentences', {
+    const { data, error } = await supabaseClient.rpc('match_chunks', {
         query_embedding: embedding,
         match_count: 20
     });
