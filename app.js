@@ -420,7 +420,7 @@ async function keywordSearch() {
         // with its talk's details nested under row.talks.
         const { data, error } = await supabaseClient
             .from('talk_chunks')
-            .select('text, talk_id, talks(title, speaker, url)')
+            .select('text, talk_id, talks(title, speaker, calling, url)')
             .ilike('text', `%${query}%`)
             .limit(20);
 
@@ -439,6 +439,7 @@ async function keywordSearch() {
                 talks[talkId] = {
                     title: row.talks?.title || 'Unknown Talk',
                     speaker: row.talks?.speaker || 'Unknown Speaker',
+                    calling: row.talks?.calling || '',
                     url: row.talks?.url || '',
                     sentences: []
                 };
@@ -450,7 +451,7 @@ async function keywordSearch() {
         for (const talk of Object.values(talks)) {
             html += `<div class="result-card">
                 <div class="result-title"><a href="${escapeHtml(talk.url)}" target="_blank" class="result-title-link">${escapeHtml(talk.title)}</a></div>
-                <div class="result-speaker">by ${escapeHtml(cleanSpeaker(talk.speaker))}</div>
+                <div class="result-speaker">${speakerLine(talk.speaker, talk.calling)}</div>
                 <div class="result-sentences">${talk.sentences.slice(0, 3).join('<br>')}</div>
             </div>`;
         }
@@ -481,19 +482,19 @@ async function semanticSearch() {
     clearResults('semantic');
 
     try {
-        // Step 1: Get embedding
-        const embedding = await getEmbedding(query);
+        // Step 1: Get embedding (plus any speaker/calling filters in the query)
+        const { embedding, filters } = await prepareQuestion(query);
 
-        // Step 2: Search for similar sentences
-        const results = await searchSentences(embedding);
+        // Step 2: Search for similar chunks
+        const results = await searchSentences(embedding, filters);
 
         if (!results || results.length === 0) {
-            showResults('semantic', '<div class="no-results">No similar content found. Try a different query.</div>');
+            showResults('semantic', noResultsMessage(filters));
             return;
         }
 
         // Step 3: Display results with similarity badges
-        let html = '';
+        let html = filterSummary(filters);
         for (const result of results) {
             const sim = result.similarity;
             const badge = similarityBadge(sim);
@@ -501,7 +502,7 @@ async function semanticSearch() {
                 <div class="result-card-header">
                     <div>
                         <div class="result-title"><a href="${escapeHtml(result.url)}" target="_blank" class="result-title-link">${escapeHtml(result.title)}</a></div>
-                        <div class="result-speaker">by ${escapeHtml(cleanSpeaker(result.speaker))}</div>
+                        <div class="result-speaker">${speakerLine(result.speaker, result.calling)}</div>
                     </div>
                     ${badge}
                 </div>
@@ -529,11 +530,16 @@ async function askQuestion() {
     clearResults('rag');
 
     try {
-        // Step 1: Get embedding
-        const embedding = await getEmbedding(question);
+        // Step 1: Get embedding (plus any speaker/calling filters in the question)
+        const { embedding, filters } = await prepareQuestion(question);
 
-        // Step 2: Search for similar sentences
-        const results = await searchSentences(embedding);
+        // Step 2: Search for similar chunks
+        const results = await searchSentences(embedding, filters);
+
+        if (!results || results.length === 0) {
+            showResults('rag', noResultsMessage(filters));
+            return;
+        }
 
         // Step 3: Group by talk (with similarity scores and URLs)
         const topTalks = groupByTalk(results);
@@ -548,7 +554,7 @@ async function askQuestion() {
         const simClass = overallSimilarity >= 0.70 ? 'similarity-high'
             : overallSimilarity >= 0.40 ? 'similarity-mid' : 'similarity-low';
 
-        let html = `<div class="result-card rag-answer rag-${simClass}">
+        let html = filterSummary(filters) + `<div class="result-card rag-answer rag-${simClass}">
             <div class="result-card-header">
                 <div class="result-title">AI Answer</div>
                 ${overallBadge}
@@ -564,7 +570,7 @@ async function askQuestion() {
                 <div class="result-card-header">
                     <div>
                         <div class="result-title"><a href="${escapeHtml(talk.url)}" target="_blank" class="result-title-link">${escapeHtml(talk.title)}</a></div>
-                        <div class="result-speaker">by ${escapeHtml(cleanSpeaker(talk.speaker))}</div>
+                        <div class="result-speaker">${speakerLine(talk.speaker, talk.calling)}</div>
                     </div>
                     ${talkBadge}
                 </div>
@@ -583,26 +589,32 @@ async function askQuestion() {
 // SHARED SEARCH UTILITIES
 // ============================================
 
-// Get embedding via Edge Function
-async function getEmbedding(text) {
+// Get an embedding via the Edge Function. With parse: true it also pulls
+// speaker and calling-group filters out of the question (e.g. "What have
+// apostles said about grace?") and embeds only the topic. filters is null
+// when the question names no speaker or calling.
+async function prepareQuestion(text) {
     const { data, error } = await supabaseClient.functions.invoke('embed-question', {
-        body: { question: text }
+        body: { question: text, parse: true }
     });
 
     if (error) {
         throw new Error(data?.error || 'Failed to get embedding');
     }
 
-    return data.embedding;
+    return { embedding: data.embedding, filters: data.filters || null };
 }
 
-// Search sentences using vector similarity
-async function searchSentences(embedding) {
+// Search chunks using vector similarity, limited to the filters (if any)
+async function searchSentences(embedding, filters) {
     if (!supabaseClient) throw new Error('Supabase not configured');
 
     const { data, error } = await supabaseClient.rpc('match_chunks', {
         query_embedding: embedding,
-        match_count: 20
+        match_count: 20,
+        filter_speakers: filters?.speakers?.length ? filters.speakers : null,
+        filter_calling_groups: filters?.calling_groups?.length ? filters.calling_groups : null,
+        filter_mode: filters?.combine || 'and'
     });
 
     if (error) throw new Error(`Database search failed: ${error.message}`);
@@ -619,6 +631,7 @@ function groupByTalk(sentences) {
                 talk_id: sent.talk_id,
                 title: sent.title,
                 speaker: sent.speaker,
+                calling: sent.calling,
                 url: sent.url,
                 sentences: [],
                 totalSimilarity: 0
@@ -635,6 +648,7 @@ function groupByTalk(sentences) {
             talk_id: talk.talk_id,
             title: talk.title,
             speaker: talk.speaker,
+            calling: talk.calling,
             url: talk.url,
             text: talk.sentences.join(' '),
             // TODO: Is average similarity the right metric? Alternatives worth researching:
@@ -679,6 +693,53 @@ function clearResults(type) {
 // e.g. "By President Russell\u00a0M. Nelson".
 function cleanSpeaker(speaker) {
     return (speaker || 'Unknown Speaker').replace(/\u00a0/g, ' ').replace(/^By\s+/, '').trim();
+}
+
+// "by Elder Jeffrey R. Holland · Of the Quorum of the Twelve Apostles"
+function speakerLine(speaker, calling) {
+    const by = `by ${escapeHtml(cleanSpeaker(speaker))}`;
+    return calling ? `${by} · ${escapeHtml(calling)}` : by;
+}
+
+const CALLING_GROUP_LABELS = {
+    first_presidency: 'First Presidency',
+    quorum_of_twelve: 'Quorum of the Twelve',
+    seventy: 'Seventy',
+    presiding_bishopric: 'Presiding Bishopric',
+    general_officers: 'general auxiliary presidencies',
+    other: 'other speakers'
+};
+
+// Describe the filters from prepareQuestion(), e.g. "Jeffrey R. Holland,
+// Matthew S. Holland" or "Dallin H. Oaks (as First Presidency)".
+function describeFilters(filters) {
+    if (!filters) return '';
+    const people = [...new Set((filters.speakers || []).map(s => cleanSpeaker(s)
+        .replace(/^Presented by\s+/, '')
+        .replace(/^(Elder|President|Sister|Brother|Bishop)\s+/, '')))];
+    const groups = (filters.calling_groups || []).map(g => CALLING_GROUP_LABELS[g] || g);
+    if (people.length && groups.length) {
+        return filters.combine === 'or'
+            ? `${people.join(', ')} or ${groups.join(' + ')}`
+            : `${people.join(', ')} (as ${groups.join(' + ')})`;
+    }
+    return people.length ? people.join(', ') : groups.join(' + ');
+}
+
+// Shown above filtered results so the user can see how the question was read
+function filterSummary(filters) {
+    const description = describeFilters(filters);
+    return description
+        ? `<div class="result-filter">Filtered to: ${escapeHtml(description)}</div>`
+        : '';
+}
+
+function noResultsMessage(filters) {
+    const description = describeFilters(filters);
+    const text = description
+        ? `No talks matched the filter (${description}). Try rephrasing the question.`
+        : 'No similar content found. Try a different query.';
+    return `<div class="no-results">${escapeHtml(text)}</div>`;
 }
 
 function escapeHtml(text) {

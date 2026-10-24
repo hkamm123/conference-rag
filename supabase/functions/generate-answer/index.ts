@@ -33,7 +33,7 @@ Rules:
 const NO_SOURCES_ANSWER =
   "I couldn't find any conference talks related to that question.";
 
-type Talk = { title: string; speaker: string; chunks: string[] };
+type Talk = { title: string; speaker: string; calling: string; chunks: string[] };
 
 function errorResponse(status: number, message: string): Response {
   // app.js reads `error` from failed responses.
@@ -94,7 +94,7 @@ export default {
     // columns we need: `embedding` would add ~30 KB of JSON per row for nothing.
     const { data: rows, error: dbError } = await ctx.supabase
       .from("talk_chunks")
-      .select("talk_id, chunk_num, text, talks(title, speaker)")
+      .select("talk_id, chunk_num, text, talks(title, speaker, calling)")
       .in("talk_id", talkIds)
       .order("talk_id")
       .order("chunk_num");
@@ -111,11 +111,12 @@ export default {
         // `talks` as a single object. Without generated database types the
         // client can't know that and types it as an array.
         const info = row.talks as unknown as
-          | { title: string; speaker: string | null }
+          | { title: string; speaker: string | null; calling: string | null }
           | null;
         talk = {
           title: info?.title ?? "Untitled talk",
           speaker: cleanSpeaker(info?.speaker ?? "Unknown"),
+          calling: info?.calling ?? "",
           chunks: [],
         };
         talks.set(row.talk_id, talk);
@@ -127,12 +128,14 @@ export default {
     }
 
     // Keep search-rank order (talkIds is ordered best match first) and give
-    // each talk a clear label so GPT can cite it.
+    // each talk a clear label so GPT can cite it. The calling lets GPT answer
+    // questions like "What have apostles said...?" accurately.
     const context = talkIds
       .filter((id) => talks.has(id))
       .map((id, i) => {
         const talk = talks.get(id)!;
-        return `[Talk ${i + 1}] "${talk.title}" by ${talk.speaker}\n${
+        const calling = talk.calling ? ` (${talk.calling})` : "";
+        return `[Talk ${i + 1}] "${talk.title}" by ${talk.speaker}${calling}\n${
           talk.chunks.join("\n\n")
         }`;
       })

@@ -657,6 +657,16 @@ input:focus {
     margin-top: var(--spacing-sm);
 }
 
+.result-filter {
+    font-size: 0.8rem;
+    color: var(--text-muted);
+    margin-bottom: var(--spacing-sm);
+    padding: var(--spacing-xs) var(--spacing-sm);
+    border-left: 3px solid var(--primary);
+    background: rgba(62, 207, 142, 0.08);
+    border-radius: var(--radius-sm);
+}
+
 .result-error {
     color: var(--error);
     padding: var(--spacing-sm);
