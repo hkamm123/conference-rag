@@ -356,7 +356,7 @@ async function checkSearchReadiness() {
         } else {
             try {
                 const { data, error: fnError } = await supabaseClient.functions.invoke('generate-answer', {
-                    body: { question: 'test', context_talks: [] }
+                    body: { question: 'test', talk_ids: [] }
                 });
                 setSearchReady('rag', !fnError || fnError.context?.status !== 404);
             } catch {
@@ -536,11 +536,9 @@ async function askQuestion() {
         // Step 3: Group by talk (with similarity scores and URLs)
         const topTalks = groupByTalk(results);
 
-        // Step 4: Fetch full talk text for richer context
-        const enrichedTalks = await fetchFullTalkText(topTalks);
-
-        // Step 5: Generate answer with full context
-        const answer = await generateAnswer(question, enrichedTalks);
+        // Step 4: Generate answer. Only the talk IDs are sent; the Edge Function
+        // loads the full talk text from the database itself.
+        const answer = await generateAnswer(question, topTalks.map(t => t.talk_id));
 
         // Compute overall similarity (weighted avg across source talks)
         const overallSimilarity = topTalks.reduce((sum, t) => sum + t.avgSimilarity, 0) / topTalks.length;
@@ -645,47 +643,12 @@ function groupByTalk(sentences) {
         }));
 }
 
-// Fetch full talk text by querying all sentences for given talk_ids, ordered by sentence_num.
-// Uses a single batched query via .in() for all talk_ids — no parallel calls needed.
-async function fetchFullTalkText(talks) {
-    if (!supabaseClient || !talks.length) return talks;
-
-    const talkIds = talks.map(t => t.talk_id);
-
-    const { data, error } = await supabaseClient
-        .from('sentence_embeddings')
-        .select('talk_id, sentence_num, text')
-        .in('talk_id', talkIds)
-        .order('talk_id')
-        .order('sentence_num');
-
-    if (error || !data) {
-        console.warn('Failed to fetch full talk text, using snippets:', error?.message);
-        return talks;
-    }
-
-    // Group fetched sentences by talk_id
-    const fullTextMap = {};
-    for (const row of data) {
-        if (!fullTextMap[row.talk_id]) fullTextMap[row.talk_id] = [];
-        fullTextMap[row.talk_id].push(row.text);
-    }
-
-    // Replace snippet text with full talk text
-    return talks.map(talk => ({
-        ...talk,
-        text: fullTextMap[talk.talk_id]
-            ? fullTextMap[talk.talk_id].join(' ')
-            : talk.text
-    }));
-}
-
-// Generate answer via Edge Function
-async function generateAnswer(question, contextTalks) {
+// Generate answer via Edge Function (it fetches the talk text for these IDs)
+async function generateAnswer(question, talkIds) {
     const { data, error } = await supabaseClient.functions.invoke('generate-answer', {
         body: {
             question: question,
-            context_talks: contextTalks
+            talk_ids: talkIds
         }
     });
 
