@@ -106,6 +106,8 @@ def scrape_talk(talk_url, session):
 
     speaker_tag = soup.find("p", {"class": "author-name"})
     speaker = speaker_tag.text.strip() if speaker_tag else "Unknown"
+    # The page shows "By President Russell M. Nelson" with a non-breaking space.
+    speaker = re.sub(r'^By\s+', '', speaker.replace('\xa0', ' '))
 
     calling_tag = soup.find("p", {"class": "author-role"})
     calling = calling_tag.text.strip() if calling_tag else ""

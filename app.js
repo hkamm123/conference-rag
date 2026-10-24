@@ -448,7 +448,7 @@ async function keywordSearch() {
         for (const talk of Object.values(talks)) {
             html += `<div class="result-card">
                 <div class="result-title"><a href="${escapeHtml(talk.url)}" target="_blank" class="result-title-link">${escapeHtml(talk.title)}</a></div>
-                <div class="result-speaker">by ${escapeHtml(talk.speaker)}</div>
+                <div class="result-speaker">by ${escapeHtml(cleanSpeaker(talk.speaker))}</div>
                 <div class="result-sentences">${talk.sentences.slice(0, 3).join('<br>')}</div>
             </div>`;
         }
@@ -499,7 +499,7 @@ async function semanticSearch() {
                 <div class="result-card-header">
                     <div>
                         <div class="result-title"><a href="${escapeHtml(result.url)}" target="_blank" class="result-title-link">${escapeHtml(result.title)}</a></div>
-                        <div class="result-speaker">by ${escapeHtml(result.speaker)}</div>
+                        <div class="result-speaker">by ${escapeHtml(cleanSpeaker(result.speaker))}</div>
                     </div>
                     ${badge}
                 </div>
@@ -562,7 +562,7 @@ async function askQuestion() {
                 <div class="result-card-header">
                     <div>
                         <div class="result-title"><a href="${escapeHtml(talk.url)}" target="_blank" class="result-title-link">${escapeHtml(talk.title)}</a></div>
-                        <div class="result-speaker">by ${escapeHtml(talk.speaker)}</div>
+                        <div class="result-speaker">by ${escapeHtml(cleanSpeaker(talk.speaker))}</div>
                     </div>
                     ${talkBadge}
                 </div>
@@ -671,6 +671,12 @@ function showResults(type, html) {
 function clearResults(type) {
     const el = document.getElementById(`${type}-results`);
     if (el) el.innerHTML = '<div class="searching">Searching...</div>';
+}
+
+// Scraped speaker names start with "By " and use a non-breaking space,
+// e.g. "By President Russell\u00a0M. Nelson".
+function cleanSpeaker(speaker) {
+    return (speaker || 'Unknown Speaker').replace(/\u00a0/g, ' ').replace(/^By\s+/, '').trim();
 }
 
 function escapeHtml(text) {
